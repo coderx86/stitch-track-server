@@ -6,9 +6,11 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Middleware
 app.use(express.json());
 app.use(cors());
 
+// MongoDB Connection
 const uri = process.env.DB_URI;
 const client = new MongoClient(uri, {
     serverApi: {
@@ -18,6 +20,9 @@ const client = new MongoClient(uri, {
     }
 });
 
+// Collection references
+let usersCollection, productsCollection, ordersCollection, trackingsCollection, paymentsCollection;
+
 app.get('/', (req, res) => {
     res.send('StitchTrack server is running!');
 });
@@ -25,9 +30,17 @@ app.get('/', (req, res) => {
 async function run() {
     try {
         await client.connect();
+        const db = client.db('garments_tracker_db');
+
+        usersCollection = db.collection('users');
+        productsCollection = db.collection('products');
+        ordersCollection = db.collection('orders');
+        trackingsCollection = db.collection('trackings');
+        paymentsCollection = db.collection('payments');
+
         console.log('Connected to MongoDB successfully');
     } finally {
-        // await client.close();
+        // Keep connection open
     }
 }
 run().catch(console.dir);

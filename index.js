@@ -73,6 +73,35 @@ async function run() {
         paymentsCollection = db.collection('payments');
 
         console.log('Connected to MongoDB successfully');
+
+        // ═══════════════════════════════════════════════════════════
+        //  USER ROUTES
+        // ═══════════════════════════════════════════════════════════
+
+        // Save user on login/register (public)
+        app.post('/users', async (req, res) => {
+            try {
+                const userData = req.body;
+                const existing = await usersCollection.findOne({ email: userData.email });
+                if (existing) {
+                    return res.send({ message: 'user already exists', user: existing });
+                }
+                const user = {
+                    name: userData.name,
+                    email: userData.email,
+                    photoURL: userData.photoURL || '',
+                    role: userData.role || 'buyer',
+                    status: 'pending',
+                    suspendReason: '',
+                    suspendFeedback: '',
+                    createdAt: new Date()
+                };
+                const result = await usersCollection.insertOne(user);
+                res.status(201).send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to save user', error: error.message });
+            }
+        });
     } finally {
         // Keep connection open
     }

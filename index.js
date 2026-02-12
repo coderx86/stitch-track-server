@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const admin = require("firebase-admin");
 require('dotenv').config();
 
 const app = express();
@@ -9,6 +10,39 @@ const port = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 app.use(cors());
+
+// Firebase Admin Init
+const serviceAccount = require("./garments-server-firebase-adminsdk-key.json");
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
+// Auth Middleware
+const verifyFBToken = async (req, res, next) => {
+    const token = req.headers.authorization;
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' });
+    }
+    try {
+        const idToken = token.split(' ')[1];
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        req.decoded_email = decodedToken.email;
+
+        // Check suspension status
+        const user = await usersCollection.findOne({ email: decodedToken.email });
+        if (user?.status === 'suspended') {
+            return res.status(403).send({
+                message: 'account suspended',
+                reason: user.suspendReason || 'Contact admin for details',
+                feedback: user.suspendFeedback
+            });
+        }
+
+        next();
+    } catch (err) {
+        return res.status(401).send({ message: 'unauthorized access' });
+    }
+};
 
 // MongoDB Connection
 const uri = process.env.DB_URI;

@@ -1,0 +1,5 @@
+node_modules
+.env
+studymate-firebase-admin-key.json
+.vercel
+encode.js

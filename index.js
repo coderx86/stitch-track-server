@@ -172,6 +172,61 @@ async function run() {
             }
         });
 
+        // ═══════════════════════════════════════════════════════════
+        //  ORDER ROUTES
+        // ═══════════════════════════════════════════════════════════
+
+        // Create order (buyer)
+        app.post('/orders', verifyFBToken, async (req, res) => {
+            try {
+                const user = await usersCollection.findOne({ email: req.decoded_email });
+                if (user && user.status === 'suspended') {
+                    return res.status(403).send({ message: 'Your account is suspended. Cannot place new orders.' });
+                }
+
+                const orderData = req.body;
+                const product = await productsCollection.findOne({ _id: new ObjectId(orderData.productId) });
+                if (!product) {
+                    return res.status(404).send({ message: 'Product not found' });
+                }
+                if (orderData.quantity > product.quantity) {
+                    return res.status(400).send({ message: 'Order quantity exceeds available quantity' });
+                }
+                if (orderData.quantity < (product.moq || 1)) {
+                    return res.status(400).send({ message: `Minimum order quantity is ${product.moq || 1}` });
+                }
+
+                const order = {
+                    userEmail: req.decoded_email,
+                    productId: orderData.productId,
+                    productTitle: orderData.productTitle,
+                    quantity: parseInt(orderData.quantity),
+                    totalPrice: parseFloat(orderData.totalPrice),
+                    firstName: orderData.firstName,
+                    lastName: orderData.lastName,
+                    contactNumber: orderData.contactNumber,
+                    deliveryAddress: orderData.deliveryAddress,
+                    notes: orderData.notes || '',
+                    status: 'pending',
+                    paymentMethod: orderData.paymentMethod || 'cod',
+                    paymentStatus: orderData.paymentMethod === 'payfirst' ? 'unpaid' : 'cod',
+                    orderedAt: new Date()
+                };
+
+                const result = await ordersCollection.insertOne(order);
+
+                // Decrement product quantity
+                await productsCollection.updateOne(
+                    { _id: new ObjectId(orderData.productId) },
+                    { $inc: { quantity: -parseInt(orderData.quantity) } }
+                );
+
+                res.status(201).send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to create order', error: error.message });
+            }
+        });
+
     } finally {
         // Keep connection open
     }

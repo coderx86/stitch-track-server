@@ -135,13 +135,25 @@ async function run() {
             } catch (error) {
                 res.status(500).send({ message: 'Failed to save user', error: error.message });
             }
-        });
-    } finally {
-        // Keep connection open
+            // ═══════════════════════════════════════════════════════════
+            //  PRODUCT ROUTES
+            // ═══════════════════════════════════════════════════════════
+
+            // Get home products (public, limited to 6)
+            app.get('/products/home', async (req, res) => {
+                try {
+                    const products = await productsCollection.find({ showOnHome: true }).limit(6).toArray();
+                    res.send(products);
+                } catch (error) {
+                    res.status(500).send({ message: 'Failed to get home products', error: error.message });
+                }
+            });
+        } finally {
+            // Keep connection open
+        }
     }
-}
 run().catch(console.dir);
 
-app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
-});
+    app.listen(port, () => {
+        console.log(`Server is running on port ${port}`);
+    });

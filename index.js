@@ -135,25 +135,49 @@ async function run() {
             } catch (error) {
                 res.status(500).send({ message: 'Failed to save user', error: error.message });
             }
-            // ═══════════════════════════════════════════════════════════
-            //  PRODUCT ROUTES
-            // ═══════════════════════════════════════════════════════════
+        });
 
-            // Get home products (public, limited to 6)
-            app.get('/products/home', async (req, res) => {
-                try {
-                    const products = await productsCollection.find({ showOnHome: true }).limit(6).toArray();
-                    res.send(products);
-                } catch (error) {
-                    res.status(500).send({ message: 'Failed to get home products', error: error.message });
+        // ═══════════════════════════════════════════════════════════
+        //  PRODUCT ROUTES
+        // ═══════════════════════════════════════════════════════════
+
+        // Get home products (public, limited to 6)
+        app.get('/products/home', async (req, res) => {
+            try {
+                const products = await productsCollection.find({ showOnHome: true }).limit(6).toArray();
+                res.send(products);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get home products', error: error.message });
+            }
+        });
+
+        // Get all products with pagination (public)
+        app.get('/products', async (req, res) => {
+            try {
+                const { search, category, page = 1, limit = 12 } = req.query;
+                const query = {};
+                if (search) {
+                    query.$or = [
+                        { title: { $regex: search, $options: 'i' } },
+                        { description: { $regex: search, $options: 'i' } }
+                    ];
                 }
-            });
-        } finally {
-            // Keep connection open
-        }
+                if (category) query.category = category;
+                const skip = (parseInt(page) - 1) * parseInt(limit);
+                const products = await productsCollection.find(query).skip(skip).limit(parseInt(limit)).toArray();
+                const total = await productsCollection.countDocuments(query);
+                res.send({ products, total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get products', error: error.message });
+            }
+        });
+
+    } finally {
+        // Keep connection open
     }
+}
 run().catch(console.dir);
 
-    app.listen(port, () => {
-        console.log(`Server is running on port ${port}`);
-    });
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+});

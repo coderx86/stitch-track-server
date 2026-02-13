@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const admin = require("firebase-admin");
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
@@ -42,6 +43,39 @@ const verifyFBToken = async (req, res, next) => {
     } catch (err) {
         return res.status(401).send({ message: 'unauthorized access' });
     }
+};
+
+const verifyAdmin = async (req, res, next) => {
+    const email = req.decoded_email;
+    const user = await usersCollection.findOne({ email });
+    if (!user || user.role !== 'admin') {
+        return res.status(403).send({ message: 'forbidden access' });
+    }
+    next();
+};
+
+const verifyManager = async (req, res, next) => {
+    const email = req.decoded_email;
+    const user = await usersCollection.findOne({ email });
+    if (!user || user.role !== 'manager') {
+        return res.status(403).send({ message: 'forbidden access' });
+    }
+    if (user.status === 'suspended') {
+        return res.status(403).send({ message: 'account suspended', suspended: true });
+    }
+    next();
+};
+
+const verifyBuyer = async (req, res, next) => {
+    const email = req.decoded_email;
+    const user = await usersCollection.findOne({ email });
+    if (!user || user.role !== 'buyer') {
+        return res.status(403).send({ message: 'forbidden access' });
+    }
+    if (user.status === 'suspended') {
+        return res.status(403).send({ message: 'account suspended', suspended: true });
+    }
+    next();
 };
 
 // MongoDB Connection

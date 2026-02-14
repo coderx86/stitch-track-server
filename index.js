@@ -219,6 +219,51 @@ async function run() {
             }
         });
 
+        // Create product (manager)
+        app.post('/products', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const productData = req.body;
+                const product = {
+                    title: productData.title,
+                    description: productData.description,
+                    category: productData.category,
+                    price: parseFloat(productData.price),
+                    quantity: parseInt(productData.quantity),
+                    images: productData.images || [],
+                    createdBy: req.decoded_email,
+                    createdAt: new Date()
+                };
+                const result = await productsCollection.insertOne(product);
+                res.status(201).send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to create product', error: error.message });
+            }
+        });
+
+        // Update product (manager)
+        app.put('/products/:id', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const { _id, ...data } = req.body;
+                const result = await productsCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: data }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to update product', error: error.message });
+            }
+        });
+
+        // Delete product (manager)
+        app.delete('/products/manager/:id', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const result = await productsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to delete product', error: error.message });
+            }
+        });
+
         // Get all products with pagination (public)
         app.get('/products', async (req, res) => {
             try {

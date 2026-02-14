@@ -148,6 +148,63 @@ async function run() {
             }
         });
 
+        // Get all users (admin only)
+        app.get('/users', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { search, role, status, page = 1, limit = 10 } = req.query;
+                const query = {};
+                if (search) {
+                    query.$or = [
+                        { name: { $regex: search, $options: 'i' } },
+                        { email: { $regex: search, $options: 'i' } }
+                    ];
+                }
+                if (role) query.role = role;
+                if (status) query.status = status;
+                const skip = (parseInt(page) - 1) * parseInt(limit);
+                const users = await usersCollection.find(query).skip(skip).limit(parseInt(limit)).toArray();
+                const total = await usersCollection.countDocuments(query);
+                res.send({ users, total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get users', error: error.message });
+            }
+        });
+
+        // Update user role (admin only)
+        app.patch('/users/:id/role', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { role } = req.body;
+                const result = await usersCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { role } }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to update role', error: error.message });
+            }
+        });
+
+        // Update user status (admin only — approve/suspend)
+        app.patch('/users/:id/status', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { status, suspendReason, suspendFeedback } = req.body;
+                const updateData = { status };
+                if (status === 'suspended') {
+                    updateData.suspendReason = suspendReason || '';
+                    updateData.suspendFeedback = suspendFeedback || '';
+                }
+                const result = await usersCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: updateData }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to update status', error: error.message });
+            }
+        });
+
         // ═══════════════════════════════════════════════════════════
         //  PRODUCT ROUTES
         // ═══════════════════════════════════════════════════════════

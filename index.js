@@ -3,6 +3,7 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const admin = require("firebase-admin");
 const jwt = require('jsonwebtoken');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 require('dotenv').config();
 
 const app = express();
@@ -337,6 +338,50 @@ async function run() {
                 res.status(201).send(result);
             } catch (error) {
                 res.status(500).send({ message: 'Failed to create order', error: error.message });
+            }
+        });
+
+        // ═══════════════════════════════════════════════════════════
+        //  PAYMENT ROUTES
+        // ═══════════════════════════════════════════════════════════
+
+        // Create Checkout Session (Stripe Redirect)
+        app.post('/create-checkout-session', verifyFBToken, async (req, res) => {
+            try {
+                const { orderId } = req.body;
+                const order = await ordersCollection.findOne({ _id: new ObjectId(orderId) });
+                if (!order) {
+                    return res.status(404).send({ message: 'Order not found' });
+                }
+
+                const amountInCents = Math.round(order.totalPrice * 100);
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ['card'],
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: 'usd',
+                                product_data: {
+                                    name: `Order: ${order.productTitle}`,
+                                },
+                                unit_amount: amountInCents,
+                            },
+                            quantity: 1,
+                        },
+                    ],
+                    mode: 'payment',
+                    metadata: {
+                        orderId: order._id.toString(),
+                        userEmail: order.userEmail
+                    },
+                    customer_email: order.userEmail,
+                    success_url: `${process.env.SITE_DOMAIN || 'http://localhost:5173'}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                    cancel_url: `${process.env.SITE_DOMAIN || 'http://localhost:5173'}/dashboard/payment-fail`,
+                });
+
+                res.send({ url: session.url });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to create checkout session', error: error.message });
             }
         });
 

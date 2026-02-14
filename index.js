@@ -137,6 +137,17 @@ async function run() {
             }
         });
 
+        // Get user role and status (needs auth)
+        app.get('/users/:email/role', verifyFBToken, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const user = await usersCollection.findOne({ email });
+                res.send({ role: user?.role || 'buyer', status: user?.status || 'active' });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get role', error: error.message });
+            }
+        });
+
         // ═══════════════════════════════════════════════════════════
         //  PRODUCT ROUTES
         // ═══════════════════════════════════════════════════════════

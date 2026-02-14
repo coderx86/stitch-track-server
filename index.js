@@ -385,6 +385,48 @@ async function run() {
             }
         });
 
+        // Handle Payment Success (Verify Session)
+        app.patch('/payment-success', verifyFBToken, async (req, res) => {
+            try {
+                const { session_id } = req.query;
+                const session = await stripe.checkout.sessions.retrieve(session_id);
+
+                if (session.payment_status === 'paid') {
+                    const orderId = session.metadata.orderId;
+                    const transactionId = session.payment_intent;
+
+                    // Update order status
+                    const updateResult = await ordersCollection.updateOne(
+                        { _id: new ObjectId(orderId) },
+                        {
+                            $set: {
+                                paymentStatus: 'paid',
+                                transactionId: transactionId,
+                                status: 'approved'
+                            }
+                        }
+                    );
+
+                    // Create payment record
+                    const payment = {
+                        orderId,
+                        email: session.customer_email,
+                        amount: session.amount_total / 100,
+                        transactionId,
+                        status: 'completed',
+                        createdAt: new Date()
+                    };
+                    await paymentsCollection.insertOne(payment);
+
+                    return res.send({ success: true, transactionId });
+                }
+
+                res.send({ success: false });
+            } catch (error) {
+                res.status(500).send({ message: 'Error processing payment success', error: error.message });
+            }
+        });
+
     } finally {
         // Keep connection open
     }

@@ -1,25 +1,24 @@
 const express = require('express');
 const cors = require('cors');
+require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const admin = require("firebase-admin");
-const jwt = require('jsonwebtoken');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
+// ─── Middleware ───────────────────────────────────────────────
 app.use(express.json());
 app.use(cors());
 
-// Firebase Admin Init
+// ─── Firebase Admin Init ─────────────────────────────────────
 const serviceAccount = require("./garments-server-firebase-adminsdk-key.json");
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
 });
 
-// Auth Middleware
+// ─── Auth Middleware ─────────────────────────────────────────
 const verifyFBToken = async (req, res, next) => {
     const token = req.headers.authorization;
     if (!token) {
@@ -79,7 +78,7 @@ const verifyBuyer = async (req, res, next) => {
     next();
 };
 
-// MongoDB Connection
+// ─── MongoDB Connection ──────────────────────────────────────
 const uri = process.env.DB_URI;
 const client = new MongoClient(uri, {
     serverApi: {
@@ -89,9 +88,10 @@ const client = new MongoClient(uri, {
     }
 });
 
-// Collection references
+// Collection references (populated on connect)
 let usersCollection, productsCollection, ordersCollection, trackingsCollection, paymentsCollection;
 
+// Root endpoint
 app.get('/', (req, res) => {
     res.send('StitchTrack server is running!');
 });
@@ -149,7 +149,21 @@ async function run() {
             }
         });
 
-        // Get user stats (admin only)
+        // Get user profile (needs auth)
+        app.get('/users/:email/profile', verifyFBToken, async (req, res) => {
+            try {
+                const email = req.params.email;
+                const user = await usersCollection.findOne({ email });
+                if (!user) {
+                    return res.status(404).send({ message: 'User not found' });
+                }
+                res.send(user);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get profile', error: error.message });
+            }
+        });
+
+        // Get user stats (admin only) — must be before /users/:id routes
         app.get('/users/stats', verifyFBToken, verifyAdmin, async (req, res) => {
             try {
                 const total = await usersCollection.countDocuments();
@@ -238,48 +252,53 @@ async function run() {
             }
         });
 
-        // Create product (manager)
-        app.post('/products', verifyFBToken, verifyManager, async (req, res) => {
+        // Get product stats (admin) — place before :id
+        app.get('/products/stats', verifyFBToken, verifyAdmin, async (req, res) => {
             try {
-                const productData = req.body;
-                const product = {
-                    title: productData.title,
-                    description: productData.description,
-                    category: productData.category,
-                    price: parseFloat(productData.price),
-                    quantity: parseInt(productData.quantity),
-                    images: productData.images || [],
-                    createdBy: req.decoded_email,
-                    createdAt: new Date()
-                };
-                const result = await productsCollection.insertOne(product);
-                res.status(201).send(result);
+                const total = await productsCollection.countDocuments();
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+                const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+                const todayCount = await productsCollection.countDocuments({ createdAt: { $gte: today } });
+                const weekCount = await productsCollection.countDocuments({ createdAt: { $gte: weekAgo } });
+                const monthCount = await productsCollection.countDocuments({ createdAt: { $gte: monthAgo } });
+                const categories = await productsCollection.aggregate([
+                    { $group: { _id: '$category', count: { $sum: 1 } } }
+                ]).toArray();
+                res.send({ total, todayCount, weekCount, monthCount, categories });
             } catch (error) {
-                res.status(500).send({ message: 'Failed to create product', error: error.message });
+                res.status(500).send({ message: 'Failed to get stats', error: error.message });
             }
         });
 
-        // Update product (manager)
-        app.put('/products/:id', verifyFBToken, verifyManager, async (req, res) => {
+        // Get admin products (all products in system)
+        app.get('/products/admin/all', verifyFBToken, verifyAdmin, async (req, res) => {
             try {
-                const { _id, ...data } = req.body;
-                const result = await productsCollection.updateOne(
-                    { _id: new ObjectId(req.params.id) },
-                    { $set: data }
-                );
-                res.send(result);
+                const { search, category } = req.query;
+                const query = {};
+                if (search) {
+                    query.$or = [
+                        { title: { $regex: search, $options: 'i' } },
+                        { description: { $regex: search, $options: 'i' } }
+                    ];
+                }
+                if (category) query.category = category;
+                const products = await productsCollection.find(query).toArray();
+                res.send(products);
             } catch (error) {
-                res.status(500).send({ message: 'Failed to update product', error: error.message });
+                res.status(500).send({ message: 'Failed to get products', error: error.message });
             }
         });
 
-        // Delete product (manager)
-        app.delete('/products/manager/:id', verifyFBToken, verifyManager, async (req, res) => {
+        // Get manager's own products
+        app.get('/products/manager/my-products', verifyFBToken, verifyManager, async (req, res) => {
             try {
-                const result = await productsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
-                res.send(result);
+                const email = req.decoded_email;
+                const products = await productsCollection.find({ createdBy: email }).toArray();
+                res.send(products);
             } catch (error) {
-                res.status(500).send({ message: 'Failed to delete product', error: error.message });
+                res.status(500).send({ message: 'Failed to get products', error: error.message });
             }
         });
 
@@ -304,9 +323,201 @@ async function run() {
             }
         });
 
+        // Get single product (public)
+        app.get('/products/:id', async (req, res) => {
+            try {
+                const product = await productsCollection.findOne({ _id: new ObjectId(req.params.id) });
+                if (!product) {
+                    return res.status(404).send({ message: 'Product not found' });
+                }
+                res.send(product);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get product', error: error.message });
+            }
+        });
+
+        // Create product (manager)
+        app.post('/products', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const productData = req.body;
+                const product = {
+                    title: productData.title,
+                    description: productData.description,
+                    category: productData.category,
+                    price: parseFloat(productData.price),
+                    quantity: parseInt(productData.quantity),
+                    moq: parseInt(productData.moq) || 1,
+                    images: productData.images || [],
+                    demoVideo: productData.demoVideo || '',
+                    paymentOption: productData.paymentOption || 'cod',
+                    showOnHome: productData.showOnHome || false,
+                    createdBy: req.decoded_email,
+                    createdAt: new Date()
+                };
+                const result = await productsCollection.insertOne(product);
+                res.status(201).send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to create product', error: error.message });
+            }
+        });
+
+        // Update product (manager)
+        app.put('/products/:id', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const { _id, ...data } = req.body;
+                if (data.price) data.price = parseFloat(data.price);
+                if (data.quantity) data.quantity = parseInt(data.quantity);
+                if (data.moq) data.moq = parseInt(data.moq);
+                const result = await productsCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: data }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to update product', error: error.message });
+            }
+        });
+
+        // Delete product (manager)
+        app.delete('/products/manager/:id', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const result = await productsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to delete product', error: error.message });
+            }
+        });
+
+        // Toggle show on home (admin)
+        app.patch('/products/:id/toggle-home', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { showOnHome } = req.body;
+                const result = await productsCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: { showOnHome } }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to toggle show on home', error: error.message });
+            }
+        });
+
+        // Update product (admin)
+        app.put('/products/admin/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { _id, ...data } = req.body;
+                if (data.price) data.price = parseFloat(data.price);
+                if (data.quantity) data.quantity = parseInt(data.quantity);
+                if (data.moq) data.moq = parseInt(data.moq);
+                const result = await productsCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: data }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to update product', error: error.message });
+            }
+        });
+
+        // Delete product (admin)
+        app.delete('/products/admin/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const result = await productsCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to delete product', error: error.message });
+            }
+        });
+
         // ═══════════════════════════════════════════════════════════
         //  ORDER ROUTES
         // ═══════════════════════════════════════════════════════════
+
+        // Get order stats (admin) — place before :id
+        app.get('/orders/stats', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const total = await ordersCollection.countDocuments();
+                const pending = await ordersCollection.countDocuments({ status: 'pending' });
+                const approved = await ordersCollection.countDocuments({ status: 'approved' });
+                const rejected = await ordersCollection.countDocuments({ status: 'rejected' });
+                const cancelled = await ordersCollection.countDocuments({ status: 'cancelled' });
+                const completed = await ordersCollection.countDocuments({ status: 'completed' });
+                const now = new Date();
+                const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+                const thisMonth = await ordersCollection.countDocuments({ orderedAt: { $gte: monthAgo } });
+                res.send({ total, pending, approved, rejected, cancelled, completed, thisMonth });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get stats', error: error.message });
+            }
+        });
+
+        // Get all orders (admin)
+        app.get('/orders/all', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const { status, search } = req.query;
+                const query = {};
+                if (status) query.status = status;
+                if (search) {
+                    query.$or = [
+                        { productTitle: { $regex: search, $options: 'i' } },
+                        { userEmail: { $regex: search, $options: 'i' } }
+                    ];
+                }
+                const orders = await ordersCollection.find(query).sort({ orderedAt: -1 }).toArray();
+                res.send(orders);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get orders', error: error.message });
+            }
+        });
+
+        // Get pending orders (manager)
+        app.get('/orders/pending', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const orders = await ordersCollection.find({ status: 'pending' }).sort({ orderedAt: -1 }).toArray();
+                res.send(orders);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get pending orders', error: error.message });
+            }
+        });
+
+        // Get approved orders (manager)
+        app.get('/orders/approved', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const orders = await ordersCollection.find({ status: 'approved' }).sort({ approvedAt: -1 }).toArray();
+                res.send(orders);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get approved orders', error: error.message });
+            }
+        });
+
+        // Get all orders for manager (log)
+        app.get('/orders/manager/all', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const { status, search } = req.query;
+                const query = {};
+                if (status) query.status = status;
+                if (search) {
+                    query.$or = [
+                        { productTitle: { $regex: search, $options: 'i' } },
+                        { userEmail: { $regex: search, $options: 'i' } }
+                    ];
+                }
+                const orders = await ordersCollection.find(query).sort({ orderedAt: -1 }).toArray();
+                res.send(orders);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get orders', error: error.message });
+            }
+        });
+
+        // Get user's orders (buyer)
+        app.get('/orders/my-orders', verifyFBToken, async (req, res) => {
+            try {
+                const orders = await ordersCollection.find({ userEmail: req.decoded_email }).sort({ orderedAt: -1 }).toArray();
+                res.send(orders);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get orders', error: error.message });
+            }
+        });
 
         // Create order (buyer)
         app.post('/orders', verifyFBToken, async (req, res) => {
@@ -324,11 +535,12 @@ async function run() {
                 if (orderData.quantity > product.quantity) {
                     return res.status(400).send({ message: 'Order quantity exceeds available quantity' });
                 }
-                if (orderData.quantity < (product.moq || 1)) {
-                    return res.status(400).send({ message: `Minimum order quantity is ${product.moq || 1}` });
+                if (orderData.quantity < product.moq) {
+                    return res.status(400).send({ message: `Minimum order quantity is ${product.moq}` });
                 }
 
                 const order = {
+                    userId: user?._id?.toString(),
                     userEmail: req.decoded_email,
                     productId: orderData.productId,
                     productTitle: orderData.productTitle,
@@ -342,7 +554,8 @@ async function run() {
                     status: 'pending',
                     paymentMethod: orderData.paymentMethod || 'cod',
                     paymentStatus: orderData.paymentMethod === 'payfirst' ? 'unpaid' : 'cod',
-                    orderedAt: new Date()
+                    orderedAt: new Date(),
+                    approvedAt: null
                 };
 
                 const result = await ordersCollection.insertOne(order);
@@ -356,6 +569,139 @@ async function run() {
                 res.status(201).send(result);
             } catch (error) {
                 res.status(500).send({ message: 'Failed to create order', error: error.message });
+            }
+        });
+
+        // Get single order details
+        app.get('/orders/:id', verifyFBToken, async (req, res) => {
+            try {
+                const order = await ordersCollection.findOne({ _id: new ObjectId(req.params.id) });
+                if (!order) {
+                    return res.status(404).send({ message: 'Order not found' });
+                }
+                const tracking = await trackingsCollection.findOne({ orderId: req.params.id });
+                res.send({ ...order, tracking: tracking?.updates || [] });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get order', error: error.message });
+            }
+        });
+
+        // Approve order (manager)
+        app.patch('/orders/:id/approve', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const user = await usersCollection.findOne({ email: req.decoded_email });
+                if (user && user.status === 'suspended') {
+                    return res.status(403).send({ message: 'Your account is suspended. Cannot approve orders.' });
+                }
+                const result = await ordersCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: { status: 'approved', approvedAt: new Date() } }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to approve order', error: error.message });
+            }
+        });
+
+        // Reject order (manager)
+        app.patch('/orders/:id/reject', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const user = await usersCollection.findOne({ email: req.decoded_email });
+                if (user && user.status === 'suspended') {
+                    return res.status(403).send({ message: 'Your account is suspended. Cannot reject orders.' });
+                }
+                const result = await ordersCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: { status: 'rejected' } }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to reject order', error: error.message });
+            }
+        });
+
+        // Cancel order (buyer — only pending)
+        app.patch('/orders/:id/cancel', verifyFBToken, async (req, res) => {
+            try {
+                const order = await ordersCollection.findOne({ _id: new ObjectId(req.params.id) });
+                if (!order) {
+                    return res.status(404).send({ message: 'Order not found' });
+                }
+                if (order.status !== 'pending') {
+                    return res.status(400).send({ message: 'Only pending orders can be cancelled' });
+                }
+                if (order.userEmail !== req.decoded_email) {
+                    return res.status(403).send({ message: 'You can only cancel your own orders' });
+                }
+                const result = await ordersCollection.updateOne(
+                    { _id: new ObjectId(req.params.id) },
+                    { $set: { status: 'cancelled' } }
+                );
+                // Restore product quantity
+                await productsCollection.updateOne(
+                    { _id: new ObjectId(order.productId) },
+                    { $inc: { quantity: order.quantity } }
+                );
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to cancel order', error: error.message });
+            }
+        });
+
+        // ═══════════════════════════════════════════════════════════
+        //  TRACKING ROUTES
+        // ═══════════════════════════════════════════════════════════
+
+        // Get tracking for an order (authenticated)
+        app.get('/trackings/:orderId', verifyFBToken, async (req, res) => {
+            try {
+                const tracking = await trackingsCollection.findOne({ orderId: req.params.orderId });
+                if (!tracking) {
+                    return res.send({ orderId: req.params.orderId, updates: [] });
+                }
+                res.send(tracking);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get tracking', error: error.message });
+            }
+        });
+
+        // Add tracking update (manager only)
+        app.post('/trackings/:orderId', verifyFBToken, verifyManager, async (req, res) => {
+            try {
+                const orderId = req.params.orderId;
+                const updateData = req.body;
+                const update = {
+                    step: updateData.step,
+                    location: updateData.location || '',
+                    note: updateData.note || '',
+                    dateTime: new Date(),
+                    status: updateData.status
+                };
+
+                const existing = await trackingsCollection.findOne({ orderId });
+                if (!existing) {
+                    await trackingsCollection.insertOne({
+                        orderId,
+                        updates: [],
+                        createdAt: new Date()
+                    });
+                }
+
+                const result = await trackingsCollection.updateOne(
+                    { orderId },
+                    { $push: { updates: update } }
+                );
+
+                // If status is Delivered, update order status to completed
+                if (updateData.status && updateData.status.toLowerCase() === 'delivered') {
+                    await ordersCollection.updateOne(
+                        { _id: new ObjectId(orderId) },
+                        { $set: { status: 'completed' } }
+                    );
+                }
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to add tracking update', error: error.message });
             }
         });
 
@@ -425,16 +771,19 @@ async function run() {
                         }
                     );
 
-                    // Create payment record
-                    const payment = {
-                        orderId,
-                        email: session.customer_email,
-                        amount: session.amount_total / 100,
-                        transactionId,
-                        status: 'completed',
-                        createdAt: new Date()
-                    };
-                    await paymentsCollection.insertOne(payment);
+                    // Create payment record if not exists
+                    const existingPayment = await paymentsCollection.findOne({ transactionId });
+                    if (!existingPayment) {
+                        const payment = {
+                            orderId,
+                            email: session.customer_email,
+                            amount: session.amount_total / 100,
+                            transactionId,
+                            status: 'completed',
+                            createdAt: new Date()
+                        };
+                        await paymentsCollection.insertOne(payment);
+                    }
 
                     return res.send({ success: true, transactionId });
                 }
@@ -445,12 +794,24 @@ async function run() {
             }
         });
 
-    } finally {
-        // Keep connection open
+        // Get payment history
+        app.get('/payments/history', verifyFBToken, async (req, res) => {
+            try {
+                const payments = await paymentsCollection.find({ email: req.decoded_email }).sort({ createdAt: -1 }).toArray();
+                res.send(payments);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get payment history', error: error.message });
+            }
+        });
+
+        app.listen(port, () => {
+            console.log(`StitchTrack server listening on port ${port}`);
+        });
+
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
     }
 }
-run().catch(console.dir);
 
-app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
-});
+run();

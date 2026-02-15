@@ -149,6 +149,24 @@ async function run() {
             }
         });
 
+        // Get user stats (admin only)
+        app.get('/users/stats', verifyFBToken, verifyAdmin, async (req, res) => {
+            try {
+                const total = await usersCollection.countDocuments();
+                const buyers = await usersCollection.countDocuments({ role: 'buyer' });
+                const managers = await usersCollection.countDocuments({ role: 'manager' });
+                const admins = await usersCollection.countDocuments({ role: 'admin' });
+                const now = new Date();
+                const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+                const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+                const newThisWeek = await usersCollection.countDocuments({ createdAt: { $gte: weekAgo } });
+                const newThisMonth = await usersCollection.countDocuments({ createdAt: { $gte: monthAgo } });
+                res.send({ total, buyers, managers, admins, newThisWeek, newThisMonth });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to get stats', error: error.message });
+            }
+        });
+
         // Get all users (admin only)
         app.get('/users', verifyFBToken, verifyAdmin, async (req, res) => {
             try {

@@ -7,7 +7,7 @@ const { initFirebaseAdmin } = require('./config/firebaseAdmin');
 const errorHandler = require('./middleware/errorHandler');
 
 const userRoutes = require('./routes/userRoutes');
-
+const productRoutes = require('./routes/productRoutes');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -27,6 +27,7 @@ app.get('/', (req, res) => res.send('🚀 StitchTrack server is running!'));
 
 // ─── Routes ──────────────────────────────────────────────────
 app.use('/users', userRoutes);
+app.use('/products', productRoutes);
 
 // ─── Centralized Error Handler ────────────────────────────────
 app.use(errorHandler);

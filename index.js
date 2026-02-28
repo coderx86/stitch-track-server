@@ -6,6 +6,9 @@ const { connectDB } = require('./config/db');
 const { initFirebaseAdmin } = require('./config/firebaseAdmin');
 const errorHandler = require('./middleware/errorHandler');
 
+const userRoutes = require('./routes/userRoutes');
+
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -21,6 +24,9 @@ app.use(cors({
 
 // ─── Health Check ─────────────────────────────────────────────
 app.get('/', (req, res) => res.send('🚀 StitchTrack server is running!'));
+
+// ─── Routes ──────────────────────────────────────────────────
+app.use('/users', userRoutes);
 
 // ─── Centralized Error Handler ────────────────────────────────
 app.use(errorHandler);

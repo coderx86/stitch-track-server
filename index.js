@@ -9,6 +9,7 @@ const errorHandler = require('./middleware/errorHandler');
 const userRoutes = require('./routes/userRoutes');
 const productRoutes = require('./routes/productRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const trackingRoutes = require('./routes/trackingRoutes');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -30,6 +31,7 @@ app.get('/', (req, res) => res.send('🚀 StitchTrack server is running!'));
 app.use('/users', userRoutes);
 app.use('/products', productRoutes);
 app.use('/orders', orderRoutes);
+app.use('/trackings', trackingRoutes);
 
 // ─── Centralized Error Handler ────────────────────────────────
 app.use(errorHandler);
